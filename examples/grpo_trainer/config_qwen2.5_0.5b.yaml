@@ -1,0 +1,76 @@
+# Configuration for Qwen2.5-0.5B-Instruct GRPO training
+# This config extends the default ppo_trainer.yaml and overrides specific parameters
+
+hydra:
+  searchpath:
+    - file://../../verl/trainer/config
+
+defaults:
+  - ppo_trainer
+  - _self_
+
+# Data configuration
+data:
+  train_files: /root/autodl-tmp/data/gsm8k/train.parquet
+  val_files: /root/autodl-tmp/data/gsm8k/test.parquet
+  train_batch_size: 512  # Increased for 8 GPUs
+  max_prompt_length: 512
+  max_response_length: 256
+  filter_overlong_prompts: True
+  truncation: error
+
+# Actor, rollout and reference model configuration
+actor_rollout_ref:
+  model:
+    path: /root/autodl-tmp/models/Qwen2.5-0.5B-Instruct
+  
+  actor:
+    optim:
+      lr: 1e-6
+    ppo_mini_batch_size: 128  # Increased for larger train_batch_size
+    ppo_micro_batch_size_per_gpu: 16  # Increased to better utilize 8 GPUs
+    loss_agg_mode: seq-mean-token-mean # GRPO paper's loss aggregation (sequence-level mean of token-level mean)
+    fsdp_config:
+      model_dtype: bfloat16
+  
+  rollout:
+    name: vllm
+    dtype: bfloat16
+    log_prob_micro_batch_size_per_gpu: 16  # Increased
+    tensor_model_parallel_size: 1  # Use 2 GPUs for tensor parallel in vLLM rollout
+    gpu_memory_utilization: 0.8  # Increased to better utilize GPU memory
+    n: 4  # Generate 4 responses per prompt for GRPO (group sampling)
+  
+  ref:
+    log_prob_micro_batch_size_per_gpu: 8  # Increased
+
+# Algorithm configuration
+algorithm:
+  # GRPO advantage estimator (no critic needed)
+  adv_estimator: grpo
+  kl_ctrl:
+    kl_coef: 0.001
+
+# Critic configuration (disabled for GRPO)
+critic:
+  enable: false
+
+# Reward model configuration
+# Note: num_examine is set in main_ppo.py (0 for training, 1 for validation)
+# So we don't set it here to avoid duplicate argument error
+reward_model:
+  reward_kwargs: {}
+
+# Trainer configuration
+trainer:
+  val_before_train: True
+  n_gpus_per_node: 1  # Use all 8 GPUs
+  nnodes: 1
+  save_freq: 14  # -1 to disable saving checkpoints
+  test_freq: 14
+  total_epochs: 1
+  resume_mode: disable  # Disable checkpoint resuming
+  logger: ["console", "tensorboard"]
+  project_name: verl_test_p1
+  experiment_name: grpo1
+  default_local_dir: /root/autodl-tmp/verl_ckpt
